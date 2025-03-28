@@ -1,4 +1,4 @@
-# DISCO: DICOM Insite Scrubbing & Compliance Orchestrator
+# DISCO: DICOM Scrubbing & Compliance Orchestrator
 
 **Author**: InsiteOne  
 **Description**: DISCO is a tag morphing engine designed to match incoming DICOM objects (or file-based images) to specific conditions, then apply configurable actions (e.g., regex modifications, deletions, anonymization). Although initially built using Python and [pydicom](https://github.com/pydicom/pydicom), DISCO is designed with a pluggable adapter architecture that can later support [dcm4che](https://github.com/dcm4che/dcm4che) or other libraries.
