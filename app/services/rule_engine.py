@@ -121,7 +121,11 @@ class RuleEvaluator:
             
             if (group, elem) in dicom_data:
                 original_val = str(dicom_data[(group, elem)].value)
+                print("DEBUG - Original Val:", repr(original_val))
+                print("DEBUG - Pattern:", pattern, "Replacement:", replacement)
+
                 new_val = re.sub(pattern, replacement, original_val)
+                print("DEBUG: new_val =", repr(new_val))
                 dicom_data[(group, elem)].value = new_val
     
     def _run_script(self, parameters: str, dicom_data: Any):

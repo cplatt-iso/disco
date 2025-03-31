@@ -1,41 +1,88 @@
 # tests/test_rule_engine.py
+
 import pytest
+from sqlalchemy.orm import Session
+from pydicom.dataset import Dataset
+
 from app.db import SessionLocal, init_db
 from app.services.rule_engine import RuleEvaluator
-from app.models import RuleSet
-import pydicom
-from pydicom.dataset import Dataset
+from app.models import RuleSet, Rule, Condition, Action
+import json
 
 @pytest.fixture
 def db_session():
-    # For a real test, you might use an in-memory SQLite, ephemeral DB, etc.
+    """Creates an in-memory DB and returns a fresh session."""
+    import os
+    os.environ["TESTING"] = "1"  # ensure we use in-memory if your db.py checks TESTING
     init_db()
-    yield SessionLocal()
+    db = SessionLocal()
+    yield db
+    db.close()
 
-def test_basic_rule(db_session):
-    # Prepare a pydicom dataset
+@pytest.fixture
+def sample_ruleset(db_session: Session):
+    """
+    Seeds a RuleSet with a single Rule that:
+      - Matches port=10104 AND AE title=PACS123
+      - Has two actions:
+        1) Delete (0010,0020)
+        2) Regex transform on (0008,0090) => "Dr^Jones" => "MDJones"
+    """
+    rs = RuleSet(name="RegexAndDeleteRuleSet")
+    rule = Rule(name="RegexAndDeleteRule", logic_operator="ALL", priority=10)
+    
+    # Conditions: port=10104, ae_title=PACS123
+    rule.conditions = [
+        Condition(attribute="port", operator="equals", value="10104"),
+        Condition(attribute="ae_title", operator="equals", value="PACS123"),
+    ]
+
+    # Actions:
+    # (1) delete (0010,0020) => removes PatientID
+    delete_action = Action(
+        action_type="delete",
+        target="dicom_tag:0010,0020"
+    )
+    # (2) regex => transforms ReferringPhysicianName (0008,0090)
+    # pattern '^Dr\^(.*)' => capturing everything after 'Dr^'
+    # replace 'MD\1' => yields "MDJones" if original is "Dr^Jones"
+    parameters = json.dumps({
+        "pattern": "^Dr\\^(.*)\\s*$",
+        "replace": "MD\\1"
+    })
+    regex_action = Action(
+        action_type="regex",
+        target="dicom_tag:0008,0090",
+        parameters=parameters
+    )
+    rule.actions.append(delete_action)
+    rule.actions.append(regex_action)
+    
+    rs.rules.append(rule)
+    db_session.add(rs)
+    db_session.commit()
+    return rs
+
+def test_basic_rule(db_session: Session, sample_ruleset: RuleSet):
+    """
+    Test that the rule engine applies BOTH the delete and the regex actions:
+      - port=10104, ae_title=PACS123 => remove (0010,0020) and transform (0008,0090).
+    """
     ds = Dataset()
-    ds.PatientName = "Dr.Jones"
-    ds.AccessionNumber = "ABC123"
-    ds[0x0008, 0x0090] = "Dr.Jones"  # for the "regex" action example
+    ds.PatientName = "John^Doe"           # (0010,0010)
+    ds.AccessionNumber = "ABC123"         # (0008,0050), not relevant here
+    ds.ReferringPhysicianName = "Dr^Jones"  # (0008,0090) => should become "MDJones"
+    ds.PatientID = "12345"               # (0010,0020) => should get deleted
 
-    # Suppose rule_set_id = 1 is the seeded "Test RuleSet"
-    rule_set_id = 1
+    # Evaluate the new rule set
     evaluator = RuleEvaluator(db_session)
-
-    context = {
+    evaluator.evaluate_ruleset(sample_ruleset.id, {
         "port": "10104",
         "ae_title": "PACS123",
-    }
+    }, ds)
 
-    evaluator.evaluate_ruleset(rule_set_id, context, ds)
-    
-    # After applying "delete" action, AccessionNumber (0010,0020) should be gone
-    # or in your code it might be something else; adjust accordingly
-    # Example: if your sample rule used 0010,0020 => check it's gone
-    # Also check the regex change was applied
-    # e.g. "Dr.Jones" => "MDJones"
-    
-    # Make sure ds[0x0008,0x0090] was updated:
-    assert ds[0x0008,0x0090].value == "MDJones"
+    # (1) "delete" action => (0010,0020) no longer present
+    assert not hasattr(ds, "PatientID"), "PatientID tag should have been deleted"
+    # (2) "regex" action => "Dr^Jones" => "MDJones"
+    assert ds.ReferringPhysicianName == "MDJones"
 

@@ -1,0 +1,4 @@
+pytest
+pydicom
+sqlalchemy
+
