@@ -44,7 +44,7 @@
 - **Local Dev**:
   - A Python virtual environment (`venv`).
   - Logging is enabled for debugging transformations and evaluation flow.
-  - Basic testing with [pytest](https://docs.pytest.org/en/stable/) (coming soon).
+  - Basic testing with [pytest](https://docs.pytest.org/en/stable/).
 
 ---
 
