@@ -1,6 +1,6 @@
 # DISCO: DICOM Scrubbing & Compliance Orchestrator
 
-**Author**: InsiteOne  
+**Author**: Chris Platt
 **Description**: DISCO is a tag morphing engine designed to match incoming DICOM objects (or file-based images) to specific conditions, then apply configurable actions (e.g., regex modifications, deletions, anonymization). Although initially built using Python and [pydicom](https://github.com/pydicom/pydicom), DISCO is designed with a pluggable adapter architecture that can later support [dcm4che](https://github.com/dcm4che/dcm4che) or other libraries.
 
 ---
@@ -16,27 +16,34 @@
 
 ### Key Components
 
-- **Data Model** (SQLAlchemy):  
-  - **RuleSet** → Groups multiple rules (e.g., “Research Anonymization”).  
-  - **Rule** → Defines conditions and actions, plus priority/order.  
-  - **Condition** → A single match criterion (e.g., `attribute='ae_title', operator='equals', value='PACS123'`).  
-  - **Action** → A single transformation (e.g., `action_type='delete'`, `target='dicom_tag:0010,0020'`).
+- **Data Model** (SQLAlchemy):
+  - **RuleSet** → Groups multiple rules (e.g., “Research Anonymization”).
+  - **Rule** → Defines conditions and actions, plus priority/order.
+  - **Condition** → A single match criterion (e.g., `attribute='ae_title', operator='equals', value='PACS123'`).
+  - **Action** → A single transformation, now using structured JSON parameters (e.g., `{"action_type": "regex", "target": "dicom_tag", "parameters": {"tag": "0010,0010", "pattern": "(.*)\\^(.*)", "replace": "Anon\\2"}}`).
 
-- **Rule Engine**:  
-  - Retrieves RuleSets from the database.  
-  - Evaluates each Rule’s conditions against the incoming DICOM object and context.  
-  - Applies any matching actions in sequence (or stops after the first match if desired).
+- **Rule Engine**:
+  - Retrieves RuleSets from the database.
+  - Evaluates each Rule’s conditions against the incoming DICOM object and context.
+  - Applies the first matching Rule’s actions.
+  - Supports structured `parameters` for extensible action configuration.
 
-- **Database**:  
-  - SQLite/Postgres/MySQL (via SQLAlchemy).  
+- **Ruleset CLI Utility**:
+  - Create, update, delete, and inspect rules and RuleSets.
+  - Structured action input via JSON on the command line.
+  - Outputs rule definitions as JSON for verification.
+
+- **Database**:
+  - SQLite/Postgres/MySQL (via SQLAlchemy).
   - Uses migrations (Alembic) for schema evolution (optional at this stage).
 
 - **Python-based**:
-  - **pydicom** for reading, modifying, and saving DICOM files (in progress).  
-  - Potential to integrate dcm4che as a separate microservice in the future.
+  - **pydicom** for reading, modifying, and saving DICOM files.
+  - **pynetdicom** as a DICOM Store SCP for real-time ingestion and transformation.
 
-- **Local Dev**:  
-  - A Python virtual environment (`venv`).  
+- **Local Dev**:
+  - A Python virtual environment (`venv`).
+  - Logging is enabled for debugging transformations and evaluation flow.
   - Basic testing with [pytest](https://docs.pytest.org/en/stable/) (coming soon).
 
 ---
@@ -52,7 +59,10 @@ disco/                          # Project root
 │   ├── main.py                 # Entry point for setup tasks (db init, seeding, etc.)
 │   └── services/
 │       ├── __init__.py
-│       └── rule_engine.py      # Core logic for evaluating rules and applying actions
+│       ├── rule_engine.py      # Core logic for evaluating rules and applying actions
+│       ├── ruleset_api.py      # Business logic for CRUD on rules and RuleSets
+│       ├── ruleset_cli.py      # CLI interface for ruleset operations
+│       └── cstore_scp.py       # pynetdicom-based DICOM Store SCP handler
 ├── tests/
 │   ├── __init__.py
 │   ├── test_rules.py           # Unit tests for rules & conditions
