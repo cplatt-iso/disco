@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+venv/
 *.sqlite3
+dicom_inbound/
+inspect_dicom.py
