@@ -1,71 +1,55 @@
 # app/main.py
-from .db import init_db, SessionLocal
-from .models import RuleSet, Rule, Condition, Action
-import json
+import subprocess
+import os
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
-def seed_data():
-    """Create a sample RuleSet with conditions and actions that
-    match your test scenario."""
+from app.db import init_db, SessionLocal
+from app.api import cstore
+from app.models import RuleSet
+from app.services.initialize import seed_default_ruleset
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+
+    # Only seed default rule if no rulesets exist
     db = SessionLocal()
-
-    # Create a RuleSet named "Test RuleSet"
-    rs = RuleSet(name="Test RuleSet")
-    db.add(rs)
-    db.commit()
-    db.refresh(rs)  # so rs.id is available
-
-    # Create a Rule that:
-    # - Matches port=10104 AND ae_title=PACS123
-    # - Applies two actions:
-    #     1) Regex on (0008,0090) => transform "Dr^Jones" to "MDJones"
-    #     2) Delete (0010,0020)
-    rule = Rule(
-        ruleset_id=rs.id,
-        name="RegexAndDeleteRule",
-        logic_operator="ALL",
-        priority=10
-    )
-
-    # Two matching conditions
-    rule.conditions = [
-        Condition(attribute="port", operator="equals", value="10104"),
-        Condition(attribute="ae_title", operator="equals", value="PACS123"),
-    ]
-
-    # Action 1: Regex transformation for (0008,0090)
-    # pattern = '^Dr\^(.*)' and replace = 'MD\1'
-    # This will transform "Dr^Jones" to "MDJones", allowing trailing whitespace
-    import json
-    parameters = json.dumps({
-        "pattern": "^Dr\\^(.*)\\s*$",  # allows trailing whitespace
-        "replace": "MD\\1"
-    })
-    regex_action = Action(
-        action_type="regex",
-        target="dicom_tag:0008,0090",
-        parameters=parameters
-    )
-    rule.actions.append(regex_action)
-
-    # Action 2: Delete PatientID (0010,0020)
-    delete_action = Action(
-        action_type="delete",
-        target="dicom_tag:0010,0020"
-    )
-    rule.actions.append(delete_action)
-
-    print("DEBUG: Seeding multi-action rule (regex + delete)")
-
-    db.add(rule)
-    db.commit()
+    has_rules = db.query(RuleSet).first() is not None
     db.close()
+    if not has_rules:
+        seed_default_ruleset()
 
+    start_frontend()
+    yield
 
-def setup_database():
-    """Create all tables and seed sample data."""
-    init_db()     # Creates the tables
-    seed_data()   # Inserts our test data
+app = FastAPI(lifespan=lifespan)
+
+# Mount backend API routers
+app.include_router(cstore.router, prefix="/api/cstore")
+
+@app.get("/")
+def root():
+    return {"message": "DISCO backend is running"}
+
+def start_frontend():
+    if os.getenv("DISCO_DEV_FRONTEND", "1") == "1":
+        subprocess.Popen(
+            ["npm", "run", "dev", "--", "--host"],
+            cwd=os.path.join(os.path.dirname(__file__), "frontend"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("Frontend server started at http://<your-ip>:5173")
 
 if __name__ == "__main__":
-    setup_database()
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
 

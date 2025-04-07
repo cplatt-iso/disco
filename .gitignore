@@ -5,3 +5,5 @@ venv/
 *.sqlite3
 dicom_inbound/
 inspect_dicom.py
+app/frontend/node_modules/
+

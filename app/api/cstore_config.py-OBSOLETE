@@ -1,0 +1,32 @@
+# app/api/cstore_config.py
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+import os
+import json
+from app.config.cstore import CSTORE_CONFIG_PATH, CSTORE_CONFIG
+
+router = APIRouter()
+
+class CStoreSettings(BaseModel):
+    ae_title: str
+    port: int
+    storage_dir: str
+
+@router.get("/api/cstore/config")
+def get_cstore_config():
+    return CSTORE_CONFIG
+
+@router.post("/api/cstore/config")
+def update_cstore_config(new_config: CStoreSettings):
+    try:
+        updated = {
+            "ae_title": new_config.ae_title,
+            "port": new_config.port,
+            "storage_dir": new_config.storage_dir
+        }
+        with open(CSTORE_CONFIG_PATH, "w") as f:
+            json.dump(updated, f, indent=2)
+        return {"status": "success", "config": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update config: {str(e)}")
+

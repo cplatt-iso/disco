@@ -1,0 +1,24 @@
+/* src/styles/disco.css */
+.disco-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    #ff0080,
+    #ff0080 10px,
+    #7928ca 10px,
+    #7928ca 20px
+  );
+  animation: colorShift 4s infinite linear;
+  z-index: 0;
+  opacity: 0.3;
+}
+
+@keyframes colorShift {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
