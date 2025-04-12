@@ -1,7 +1,13 @@
 // app/frontend/src/pages/Dashboard.jsx
-import { useState, useMemo, Suspense } from "react";
+import { useState, useMemo, Suspense, lazy } from "react";
+// --- Import Loader2 ---
+import { Loader2 } from "lucide-react";
+// --- End Import ---
 import SidebarTabButton from "../components/SidebarTabButton";
 import Settings from "./Settings";
+
+// Lazily load RulesEditor for potentially better initial load
+const RulesEditor = lazy(() => import("./RulesEditor"));
 
 const tabs = ["Health", "Rules Editor", "Settings"];
 
@@ -21,6 +27,7 @@ export default function Dashboard() {
     });
   }, []);
 
+
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
@@ -38,29 +45,29 @@ export default function Dashboard() {
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 p-6 overflow-auto">
-        {activeTab === "Health" && (
-          <div>
-            <h1 className="text-2xl font-semibold mb-4">Health Dashboard</h1>
-            <Suspense fallback={<div>Loading widgets...</div>}>{widgets}</Suspense>
-          </div>
-        )}
+      <div className="flex-1 p-6 overflow-auto bg-background text-foreground">
+        {/* Wrap content in Suspense for lazy loading */}
+        {/* Use the imported Loader2 in the fallback */}
+        <Suspense fallback={<div className="flex justify-center items-center h-full"><Loader2 className="h-16 w-16 animate-spin text-primary" /></div>}>
+          {activeTab === "Health" && (
+            <div>
+              <h1 className="text-2xl font-semibold mb-4">Health Dashboard</h1>
+              {widgets}
+            </div>
+          )}
 
-        {activeTab === "Rules Editor" && (
-          <div>
-            <h1 className="text-2xl font-semibold">Rules Editor</h1>
-            <p className="text-muted-foreground mt-2">Coming soon...</p>
-          </div>
-        )}
+          {activeTab === "Rules Editor" && (
+            <RulesEditor />
+          )}
 
-        {activeTab === "Settings" && (
-          <div>
-            <h1 className="text-2xl font-semibold mb-4">Settings</h1>
-            <Settings />
-          </div>
-        )}
+          {activeTab === "Settings" && (
+            <div>
+              <h1 className="text-2xl font-semibold mb-4">Settings</h1>
+              <Settings />
+            </div>
+          )}
+        </Suspense>
       </div>
     </div>
   );
 }
-

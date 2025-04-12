@@ -1,6 +1,9 @@
 pytest
 pydicom
+pydantic
 sqlalchemy
 pynetdicom
 fastapi
 uvicorn
+psycopg2-binary
+mysql-connector-python

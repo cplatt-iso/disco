@@ -1,4 +1,7 @@
 {
-  "ae_title": "TEST_DICOM",
-  "port": 10105
+  "ae_title": "DISCO_SSCP",
+  "port": 10105,
+  "bind_address": "0.0.0.0",
+  "max_pdu_size": 116794,
+  "storage_dir": "dicom_inbound"
 }
