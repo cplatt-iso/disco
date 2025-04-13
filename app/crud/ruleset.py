@@ -1,302 +1,157 @@
 # app/crud/ruleset.py
-"""
-CRUD operations for RuleSet, Rule, Condition, Action models.
-These functions interact directly with the database via SQLAlchemy Session.
-"""
-import logging
-from sqlalchemy.orm import Session, joinedload, contains_eager, defer, undefer
+
+from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import List, Optional
-from datetime import datetime
 
-from app import models
-# --- Updated Import ---
-# Import the specific schemas module and alias it
-from app.schemas import ruleset as ruleset_schemas
-# --- End Updated Import ---
+# Import models using the correct casing ('Ruleset')
+from app import models, schemas # Import the main schemas module
+import json
 
-logger = logging.getLogger(__name__)
-
-# --- Ruleset CRUD ---
-
-def get_ruleset(db: Session, ruleset_id: int) -> Optional[models.RuleSet]:
-    """
-    Gets a single ruleset by ID, eagerly loading its rules,
-    and their associated conditions and actions.
-    """
-    logger.debug(f"Fetching ruleset with ID: {ruleset_id}")
-    return db.query(models.RuleSet).options(
-        joinedload(models.RuleSet.rules).options( # Load rules
-            joinedload(models.Rule.conditions),     # Load conditions for each rule
-            joinedload(models.Rule.actions)       # Load actions for each rule
-        )
-    ).filter(models.RuleSet.id == ruleset_id).first()
-
-def get_rulesets(db: Session, skip: int = 0, limit: int = 100) -> List[models.RuleSet]:
-    """
-    Gets a list of rulesets with pagination.
-    Uses joinedload for nested relationships, which might be heavy.
-    Consider using selectinload or removing options for performance on large datasets.
-    """
-    logger.debug(f"Fetching rulesets list, skip: {skip}, limit: {limit}")
-    # Using joinedload can cause cartesian product issues if rules/conditions/actions are numerous.
-    # selectinload is often better for loading collections across relationships.
-    # Example using selectinload:
-    # from sqlalchemy.orm import selectinload
-    # return db.query(models.RuleSet).options(
-    #     selectinload(models.RuleSet.rules).options(
-    #         selectinload(models.Rule.conditions),
-    #         selectinload(models.Rule.actions)
-    #     )
-    # ).order_by(models.RuleSet.name).offset(skip).limit(limit).all()
-
-    # Sticking with joinedload as per original for now:
-    return db.query(models.RuleSet).options(
-         joinedload(models.RuleSet.rules).options(
-             joinedload(models.Rule.conditions),
-             joinedload(models.Rule.actions)
-         )
-     ).order_by(models.RuleSet.name).offset(skip).limit(limit).all()
-
-def get_ruleset_by_name(db: Session, name: str) -> Optional[models.RuleSet]:
-    """Gets a single ruleset by name."""
-    logger.debug(f"Fetching ruleset by name: {name}")
-    return db.query(models.RuleSet).filter(models.RuleSet.name == name).first()
-
-def create_ruleset(db: Session, ruleset: ruleset_schemas.RulesetCreate) -> models.RuleSet:
-    """Creates a new ruleset."""
-    logger.info(f"Creating new ruleset with name: {ruleset.name}")
-    db_ruleset = models.RuleSet(
-        name=ruleset.name,
-        description=ruleset.description,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
+# --- Helper function to safely parse JSON ---
+def parse_params(params_str: Optional[str]) -> dict:
+    """Safely parse JSON string from Action params."""
+    if params_str is None:
+        return {}
     try:
-        db.add(db_ruleset)
+        params = json.loads(params_str)
+        return params if isinstance(params, dict) else {}
+    except json.JSONDecodeError:
+        print(f"Warning: Could not decode JSON params: {params_str}") # Use proper logging
+        return {}
+
+# --- RuleSet CRUD ---
+
+def get_ruleset(db: Session, ruleset_id: int) -> Optional[models.Ruleset]:
+    """Gets a single ruleset by ID, eagerly loading relationships."""
+    return db.query(models.Ruleset).options(
+        selectinload(models.Ruleset.rules)
+        .selectinload(models.Rule.conditions),
+        selectinload(models.Ruleset.rules)
+        .joinedload(models.Rule.action) # joinedload suitable for one-to-one
+    ).filter(models.Ruleset.id == ruleset_id).first()
+
+def get_rulesets(db: Session, skip: int = 0, limit: int = 100) -> List[models.Ruleset]:
+    """Gets a list of rulesets (consider adding ordering)."""
+    # Avoid eager loading all details for list view unless specifically needed
+    return db.query(models.Ruleset).order_by(models.Ruleset.name).offset(skip).limit(limit).all()
+
+# Use schemas.RulesetCreate (lowercase 's')
+def create_ruleset(db: Session, ruleset: schemas.RulesetCreate) -> models.Ruleset:
+    """Creates a new ruleset with its rules, conditions, and actions."""
+    db_ruleset = models.Ruleset(name=ruleset.name)
+    db.add(db_ruleset)
+
+    try:
+        # Flush to get the ruleset ID before creating related items
+        db.flush()
+
+        if ruleset.rules:
+            for rule_data in ruleset.rules:
+                # Ensure action data exists before accessing attributes
+                if not rule_data.action:
+                     # Handle missing action data appropriately (skip rule, raise error?)
+                     print(f"Warning: Rule '{rule_data.description}' missing action data. Skipping rule.")
+                     continue # Or raise ValueError("Action data is required for each rule")
+
+                action_params_str = json.dumps(rule_data.action.params or {})
+                db_action = models.Action(
+                    type=rule_data.action.type,
+                    params=action_params_str
+                )
+                # Note: Action is linked via rule.action relationship below
+
+                db_rule = models.Rule(
+                    description=rule_data.description,
+                    action=db_action, # Set the one-to-one relationship
+                    ruleset=db_ruleset # Set the many-to-one relationship
+                )
+                # db.add(db_rule) # Not needed if cascade is set correctly on ruleset.rules
+
+                if rule_data.conditions:
+                    for cond_data in rule_data.conditions:
+                        db_condition = models.Condition(
+                            attribute=cond_data.attribute,
+                            operator=cond_data.operator,
+                            value=cond_data.value,
+                            rule=db_rule # Set the many-to-one relationship
+                        )
+                        # db.add(db_condition) # Not needed if cascade is set correctly on rule.conditions
+
+        # Commit the whole transaction
         db.commit()
-        db.refresh(db_ruleset)
-        logger.info(f"Ruleset '{db_ruleset.name}' created successfully with ID: {db_ruleset.id}")
+        db.refresh(db_ruleset) # Refresh to load all relationships correctly
         return db_ruleset
     except Exception as e:
-        logger.error(f"Failed to create ruleset '{ruleset.name}': {e}", exc_info=True)
         db.rollback()
-        raise # Re-raise the exception after rollback
+        print(f"Error creating ruleset: {e}") # Use proper logging
+        raise
 
-def update_ruleset(db: Session, ruleset_id: int, ruleset_update: ruleset_schemas.RulesetUpdate) -> Optional[models.RuleSet]:
-    """Updates an existing ruleset's name and/or description."""
-    logger.info(f"Updating ruleset ID: {ruleset_id}")
-    db_ruleset = get_ruleset(db, ruleset_id) # Use get_ruleset to ensure eager loading if needed later
-    if not db_ruleset:
-        logger.warning(f"Update failed: Ruleset ID {ruleset_id} not found.")
-        return None
+# Use schemas.RulesetUpdate (lowercase 's' - assuming this exists)
+def update_ruleset(db: Session, ruleset_id: int, ruleset_update: schemas.RulesetUpdate) -> Optional[models.Ruleset]:
+    """Updates an existing ruleset (currently only Name)."""
+    # Fetch with relationship loading if you intend to update nested items later
+    db_ruleset = db.query(models.Ruleset).filter(models.Ruleset.id == ruleset_id).first()
 
-    update_data = ruleset_update.dict(exclude_unset=True) # Get only provided fields
-    updated = False
-    for key, value in update_data.items():
-        if getattr(db_ruleset, key) != value:
-             setattr(db_ruleset, key, value)
-             updated = True
+    if db_ruleset:
+        # Get fields from update schema, excluding unset ones
+        update_data = ruleset_update.model_dump(exclude_unset=True)
 
-    if updated:
-        db_ruleset.updated_at = datetime.utcnow()
+        # --- Simplified Update (Only Name) ---
+        if "name" in update_data:
+            db_ruleset.name = update_data["name"]
+
+        # --- Complex Update (Handling Rules/Conditions/Actions - Placeholder) ---
+        # if "rules" in update_data:
+        #   Requires comparing incoming rules with existing, deleting removed ones,
+        #   updating existing ones (which might involve deleting/recreating conditions/action),
+        #   and adding new ones. This is significantly more complex logic.
+        #   Example sketch:
+        #   existing_rule_ids = {rule.id for rule in db_ruleset.rules}
+        #   incoming_rule_ids = {rule.id for rule in ruleset_update.rules if rule.id}
+        #   # ... logic to delete rules not in incoming_rule_ids ...
+        #   # ... logic to update rules in both sets ...
+        #   # ... logic to add rules only in incoming_rule_ids without an id ...
+        #   pass # Requires detailed implementation
+
         try:
             db.commit()
             db.refresh(db_ruleset)
-            logger.info(f"Ruleset ID {ruleset_id} updated successfully.")
-            return db_ruleset
         except Exception as e:
-            logger.error(f"Failed to update ruleset ID {ruleset_id}: {e}", exc_info=True)
-            db.rollback()
-            raise
-    else:
-         logger.info(f"No changes detected for ruleset ID {ruleset_id}. Skipping update commit.")
-         return db_ruleset # Return the existing object even if no changes
+             db.rollback()
+             print(f"Error updating ruleset {ruleset_id}: {e}") # Use proper logging
+             raise
+    return db_ruleset
 
 
-def delete_ruleset(db: Session, ruleset_id: int) -> Optional[models.RuleSet]:
-    """
-    Deletes a ruleset. Cascade settings on the models should handle deletion
-    of associated rules, conditions, and actions.
-    """
-    logger.warning(f"Attempting to delete ruleset ID: {ruleset_id}")
-    # Query first to return the object details upon successful deletion
-    db_ruleset = db.query(models.RuleSet).filter(models.RuleSet.id == ruleset_id).first()
+def delete_ruleset(db: Session, ruleset_id: int) -> Optional[models.Ruleset]:
+    """Deletes a ruleset by ID. Cascading deletes handle related items."""
+    db_ruleset = db.query(models.Ruleset).filter(models.Ruleset.id == ruleset_id).first()
     if db_ruleset:
         try:
-            deleted_name = db_ruleset.name # Capture name before deletion
             db.delete(db_ruleset)
             db.commit()
-            logger.info(f"Successfully deleted ruleset ID {ruleset_id} (Name: '{deleted_name}')")
-            return db_ruleset # Return the object (now detached from session)
         except Exception as e:
-            logger.error(f"Failed to delete ruleset ID {ruleset_id}: {e}", exc_info=True)
-            db.rollback()
-            raise
-    else:
-        logger.warning(f"Deletion failed: Ruleset ID {ruleset_id} not found.")
-        return None
+             db.rollback()
+             print(f"Error deleting ruleset {ruleset_id}: {e}") # Use proper logging
+             raise # Optional: re-raise or return None/False
+             # return None # Indicate failure if re-raise is not desired
+    return db_ruleset # Returns the deleted object if found, or None if not found
 
-
-# --- Rule CRUD (within a Ruleset) ---
-
-def create_rule_for_ruleset(db: Session, rule: ruleset_schemas.RuleCreate, ruleset_id: int) -> Optional[models.Rule]:
-    """
-    Creates a new rule with its conditions and actions and associates
-    it with an existing ruleset.
-    """
-    logger.info(f"Attempting to add rule '{rule.name}' to ruleset ID: {ruleset_id}")
-    # Check if ruleset exists first
-    db_ruleset = db.query(models.RuleSet).filter(models.RuleSet.id == ruleset_id).first()
-    if not db_ruleset:
-        logger.error(f"Cannot add rule: Ruleset ID {ruleset_id} not found.")
-        return None # Ruleset not found
-
-    # Create the Rule object from the schema, excluding nested lists initially
-    db_rule = models.Rule(
-        **rule.dict(exclude={'conditions', 'actions'}), # Unpack base rule fields
-        ruleset_id=ruleset_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
-
-    # Create associated conditions from the schema and add to the rule's collection
-    if rule.conditions:
-        logger.debug(f"Adding {len(rule.conditions)} conditions to rule '{rule.name}'")
-        for condition_in in rule.conditions:
-            db_condition = models.Condition(**condition_in.dict())
-            db_rule.conditions.append(db_condition) # Appending associates them via relationship
-
-    # Create associated actions from the schema and add to the rule's collection
-    if rule.actions:
-        logger.debug(f"Adding {len(rule.actions)} actions to rule '{rule.name}'")
-        for action_in in rule.actions:
-            db_action = models.Action(**action_in.dict())
-            db_rule.actions.append(db_action) # Appending associates them via relationship
-
-    try:
-        # Add the rule. SQLAlchemy handles inserting conditions/actions
-        # due to the relationships and cascade settings (if configured correctly).
-        db.add(db_rule)
-        db.commit()
-        db.refresh(db_rule) # Refresh to get the rule's ID and potentially defaults
-
-        # Eagerly load conditions/actions for the returned object if needed,
-        # although accessing them later would lazy-load them anyway.
-        # db.refresh(db_rule, attribute_names=['conditions', 'actions'])
-        logger.info(f"Rule '{db_rule.name}' (ID: {db_rule.id}) added successfully to ruleset ID {ruleset_id}.")
-
-        return db_rule
-    except Exception as e:
-        logger.error(f"Failed to add rule '{rule.name}' to ruleset ID {ruleset_id}: {e}", exc_info=True)
-        db.rollback()
-        raise
-
-
-# --- Functions for reading/updating/deleting individual Rules, Conditions, Actions ---
-
+# --- Rule CRUD ---
 def get_rule(db: Session, rule_id: int) -> Optional[models.Rule]:
-     """Gets a single rule by ID, loading associated conditions and actions."""
-     logger.debug(f"Fetching rule with ID: {rule_id}")
-     return db.query(models.Rule).options(
-         joinedload(models.Rule.conditions), # Use joinedload or selectinload
-         joinedload(models.Rule.actions)
-     ).filter(models.Rule.id == rule_id).first()
+    """Gets a single rule by ID."""
+    # Consider eager loading action/conditions if needed when getting rule directly
+    return db.query(models.Rule).options(
+        joinedload(models.Rule.action),
+        selectinload(models.Rule.conditions)
+    ).filter(models.Rule.id == rule_id).first()
 
-# --- Placeholders for more complex CRUD needed for a full UI editor ---
+# --- Condition CRUD ---
+def get_condition(db: Session, condition_id: int) -> Optional[models.Condition]:
+     """Gets a single condition by ID."""
+     return db.query(models.Condition).filter(models.Condition.id == condition_id).first()
 
-def update_rule(db: Session, rule_id: int, rule_update: ruleset_schemas.RuleUpdate) -> Optional[models.Rule]:
-    """
-    Updates an existing rule.
-    Uses a REPLACE strategy for conditions and actions: deletes all existing
-    conditions/actions for this rule and creates new ones from the payload.
-    """
-    logger.info(f"Attempting to update rule ID: {rule_id}")
-    db_rule = get_rule(db, rule_id) # Fetch rule with relationships loaded
-    if not db_rule:
-        logger.warning(f"Update failed: Rule ID {rule_id} not found.")
-        return None
-
-    # 1. Update base fields of the rule
-    update_data = rule_update.dict(exclude={'conditions', 'actions'}, exclude_unset=True)
-    updated = False
-    for key, value in update_data.items():
-        if getattr(db_rule, key) != value:
-            setattr(db_rule, key, value)
-            updated = True
-
-    # 2. Replace Conditions (Delete existing, add new)
-    # Check if conditions were provided in the update payload
-    if rule_update.conditions is not None:
-        logger.debug(f"Replacing conditions for rule ID: {rule_id}")
-        # Delete existing conditions directly (alternative to cascade if needed)
-        # This ensures even if cascade isn't perfect, they are removed.
-        for condition in db_rule.conditions:
-             db.delete(condition)
-        # Flush to execute deletes before adding new ones (optional but can help)
-        # db.flush()
-        db_rule.conditions = [] # Clear the collectionproxy
-
-        # Add new conditions
-        for condition_in in rule_update.conditions:
-            db_condition = models.Condition(**condition_in.dict(), rule_id=db_rule.id)
-            # db.add(db_condition) # Adding via append is usually preferred with relationships
-            db_rule.conditions.append(db_condition)
-        updated = True # Mark as updated if conditions list was processed
-
-    # 3. Replace Actions (Delete existing, add new)
-    if rule_update.actions is not None:
-        logger.debug(f"Replacing actions for rule ID: {rule_id}")
-        # Delete existing actions
-        for action in db_rule.actions:
-            db.delete(action)
-        # db.flush()
-        db_rule.actions = [] # Clear the collectionproxy
-
-        # Add new actions
-        for action_in in rule_update.actions:
-            db_action = models.Action(**action_in.dict(), rule_id=db_rule.id)
-            db_rule.actions.append(db_action)
-        updated = True # Mark as updated if actions list was processed
-
-    # 4. Commit changes if any were made
-    if updated:
-        db_rule.updated_at = datetime.utcnow()
-        try:
-            db.commit()
-            # Refresh needed to get potentially new condition/action IDs if using append
-            db.refresh(db_rule)
-            # Explicitly load relationships again after refresh
-            db.refresh(db_rule, attribute_names=['conditions', 'actions'])
-            logger.info(f"Rule ID {rule_id} updated successfully.")
-        except Exception as e:
-            logger.error(f"Failed to update rule ID {rule_id}: {e}", exc_info=True)
-            db.rollback()
-            raise
-    else:
-         logger.info(f"No changes detected for rule ID {rule_id}. Skipping update commit.")
-
-    return db_rule
-
-def delete_rule(db: Session, rule_id: int) -> Optional[models.Rule]:
-    """Deletes a specific rule. Cascade should handle conditions/actions."""
-    logger.warning(f"Attempting to delete rule ID: {rule_id}")
-    db_rule = db.query(models.Rule).filter(models.Rule.id == rule_id).first()
-    if db_rule:
-        try:
-            deleted_name = db_rule.name # Capture name before deletion
-            ruleset_id = db_rule.ruleset_id
-            db.delete(db_rule)
-            db.commit()
-            logger.info(f"Successfully deleted rule ID {rule_id} (Name: '{deleted_name}') from ruleset ID {ruleset_id}")
-            return db_rule # Return the object (now detached from session)
-        except Exception as e:
-            logger.error(f"Failed to delete rule ID {rule_id}: {e}", exc_info=True)
-            db.rollback()
-            raise
-    else:
-        logger.warning(f"Deletion failed: Rule ID {rule_id} not found.")
-        return None
-
-
-# TODO: CRUD functions for individual Conditions and Actions if the UI needs to manage them independently.
-# Example: add_condition_to_rule, delete_condition, update_action, etc.
+# --- Action CRUD ---
+def get_action(db: Session, action_id: int) -> Optional[models.Action]:
+     """Gets a single action by ID."""
+     return db.query(models.Action).filter(models.Action.id == action_id).first()
