@@ -56,6 +56,16 @@ class RuleCreate(RuleBase):
     conditions: List[ConditionCreate] = []
     actions: List[ActionCreate] = []
 
+class RuleUpdate(RuleBase):
+    name: Optional[str] = None # Make fields optional for partial update
+    description: Optional[str] = None
+    logic_operator: Optional[str] = None
+    priority: Optional[int] = None
+    # Still require full lists for replacement strategy
+    conditions: List[ConditionCreate] = []
+    actions: List[ActionCreate] = []
+
+
 class Rule(RuleBase):
     id: int
     conditions: List[Condition] = []

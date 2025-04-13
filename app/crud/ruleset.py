@@ -204,24 +204,99 @@ def get_rule(db: Session, rule_id: int) -> Optional[models.Rule]:
 
 # --- Placeholders for more complex CRUD needed for a full UI editor ---
 
-# TODO: Implement update_rule function
-# def update_rule(db: Session, rule_id: int, rule_update: ruleset_schemas.RuleUpdate) -> Optional[models.Rule]:
-#     """Updates an existing rule, including managing nested conditions/actions."""
-#     # 1. Fetch the existing rule with conditions/actions loaded.
-#     # 2. Update base fields (name, desc, priority, logic_operator).
-#     # 3. Determine conditions/actions to add, remove, update based on rule_update payload.
-#     #    This often involves comparing IDs or using a specific payload structure.
-#     # 4. Perform DB operations (add, delete, update children).
-#     # 5. Commit and refresh.
-#     pass
+def update_rule(db: Session, rule_id: int, rule_update: ruleset_schemas.RuleUpdate) -> Optional[models.Rule]:
+    """
+    Updates an existing rule.
+    Uses a REPLACE strategy for conditions and actions: deletes all existing
+    conditions/actions for this rule and creates new ones from the payload.
+    """
+    logger.info(f"Attempting to update rule ID: {rule_id}")
+    db_rule = get_rule(db, rule_id) # Fetch rule with relationships loaded
+    if not db_rule:
+        logger.warning(f"Update failed: Rule ID {rule_id} not found.")
+        return None
 
-# TODO: Implement delete_rule function
-# def delete_rule(db: Session, rule_id: int) -> Optional[models.Rule]:
-#     """Deletes a specific rule. Cascade should handle conditions/actions."""
-#     # 1. Fetch the rule.
-#     # 2. If found, db.delete(rule) and db.commit().
-#     # 3. Return the deleted rule object (or None).
-#     pass
+    # 1. Update base fields of the rule
+    update_data = rule_update.dict(exclude={'conditions', 'actions'}, exclude_unset=True)
+    updated = False
+    for key, value in update_data.items():
+        if getattr(db_rule, key) != value:
+            setattr(db_rule, key, value)
+            updated = True
+
+    # 2. Replace Conditions (Delete existing, add new)
+    # Check if conditions were provided in the update payload
+    if rule_update.conditions is not None:
+        logger.debug(f"Replacing conditions for rule ID: {rule_id}")
+        # Delete existing conditions directly (alternative to cascade if needed)
+        # This ensures even if cascade isn't perfect, they are removed.
+        for condition in db_rule.conditions:
+             db.delete(condition)
+        # Flush to execute deletes before adding new ones (optional but can help)
+        # db.flush()
+        db_rule.conditions = [] # Clear the collectionproxy
+
+        # Add new conditions
+        for condition_in in rule_update.conditions:
+            db_condition = models.Condition(**condition_in.dict(), rule_id=db_rule.id)
+            # db.add(db_condition) # Adding via append is usually preferred with relationships
+            db_rule.conditions.append(db_condition)
+        updated = True # Mark as updated if conditions list was processed
+
+    # 3. Replace Actions (Delete existing, add new)
+    if rule_update.actions is not None:
+        logger.debug(f"Replacing actions for rule ID: {rule_id}")
+        # Delete existing actions
+        for action in db_rule.actions:
+            db.delete(action)
+        # db.flush()
+        db_rule.actions = [] # Clear the collectionproxy
+
+        # Add new actions
+        for action_in in rule_update.actions:
+            db_action = models.Action(**action_in.dict(), rule_id=db_rule.id)
+            db_rule.actions.append(db_action)
+        updated = True # Mark as updated if actions list was processed
+
+    # 4. Commit changes if any were made
+    if updated:
+        db_rule.updated_at = datetime.utcnow()
+        try:
+            db.commit()
+            # Refresh needed to get potentially new condition/action IDs if using append
+            db.refresh(db_rule)
+            # Explicitly load relationships again after refresh
+            db.refresh(db_rule, attribute_names=['conditions', 'actions'])
+            logger.info(f"Rule ID {rule_id} updated successfully.")
+        except Exception as e:
+            logger.error(f"Failed to update rule ID {rule_id}: {e}", exc_info=True)
+            db.rollback()
+            raise
+    else:
+         logger.info(f"No changes detected for rule ID {rule_id}. Skipping update commit.")
+
+    return db_rule
+
+def delete_rule(db: Session, rule_id: int) -> Optional[models.Rule]:
+    """Deletes a specific rule. Cascade should handle conditions/actions."""
+    logger.warning(f"Attempting to delete rule ID: {rule_id}")
+    db_rule = db.query(models.Rule).filter(models.Rule.id == rule_id).first()
+    if db_rule:
+        try:
+            deleted_name = db_rule.name # Capture name before deletion
+            ruleset_id = db_rule.ruleset_id
+            db.delete(db_rule)
+            db.commit()
+            logger.info(f"Successfully deleted rule ID {rule_id} (Name: '{deleted_name}') from ruleset ID {ruleset_id}")
+            return db_rule # Return the object (now detached from session)
+        except Exception as e:
+            logger.error(f"Failed to delete rule ID {rule_id}: {e}", exc_info=True)
+            db.rollback()
+            raise
+    else:
+        logger.warning(f"Deletion failed: Rule ID {rule_id} not found.")
+        return None
+
 
 # TODO: CRUD functions for individual Conditions and Actions if the UI needs to manage them independently.
 # Example: add_condition_to_rule, delete_condition, update_action, etc.

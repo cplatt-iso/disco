@@ -91,5 +91,37 @@ def create_new_rule_for_ruleset(ruleset_id: int, rule: ruleset_schemas.RuleCreat
         raise HTTPException(status_code=404, detail=f"Ruleset ID {ruleset_id} not found")
     return created_rule
 
-# --- TODO: Endpoints for reading, updating, deleting individual rules ---
-# ... (placeholders remain the same) ...
+
+
+# GET specific rule
+@router.get("/rules/{rule_id}", response_model=ruleset_schemas.Rule)
+def read_rule(rule_id: int, db: Session = Depends(get_db)):
+    """Retrieves a single rule by its ID, including conditions and actions."""
+    db_rule = ruleset_crud.get_rule(db, rule_id=rule_id)
+    if db_rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return db_rule
+
+# PUT update specific rule
+@router.put("/rules/{rule_id}", response_model=ruleset_schemas.Rule)
+def update_existing_rule(rule_id: int, rule_update: ruleset_schemas.RuleUpdate, db: Session = Depends(get_db)):
+    """
+    Updates an existing rule. Replaces all conditions and actions with
+    the provided lists (use empty lists to remove all).
+    """
+    updated_rule = ruleset_crud.update_rule(db=db, rule_id=rule_id, rule_update=rule_update)
+    if updated_rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return updated_rule
+
+# DELETE specific rule
+@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_existing_rule(rule_id: int, db: Session = Depends(get_db)):
+    """Deletes a specific rule and its associated conditions/actions."""
+    deleted_rule = ruleset_crud.delete_rule(db=db, rule_id=rule_id)
+    if deleted_rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return None
+
+# --- TODO: Endpoints for managing conditions/actions if needed ---
+
